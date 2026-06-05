@@ -29,14 +29,13 @@ jobs:
         id: merge
         uses: ten-thousand-hammers/changelog-merge@v1
 
+      - name: Install git-cliff (for the fallback)
+        if: steps.merge.outputs.has-fragments == 'false'
+        uses: ten-thousand-hammers/setup-git-cliff@v1
+
       - name: Fallback to git-cliff when there are no fragments
         if: steps.merge.outputs.has-fragments == 'false'
-        uses: orhun/git-cliff-action@v4.6.0
-        with:
-          config: cliff.toml
-          args: --unreleased
-        env:
-          OUTPUT: CHANGES_COMBINED.md
+        run: git-cliff --config cliff.toml --unreleased -o CHANGES_COMBINED.md
 
       - name: Read the unreleased changes
         id: reader
