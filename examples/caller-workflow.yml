@@ -1,0 +1,55 @@
+# Example: full promote/release job that runs after tests pass on main.
+name: Promote
+
+on:
+  workflow_run:
+    workflows: ["Test"]
+    branches: [main]
+    types: [completed]
+
+concurrency:
+  group: production_promote
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  Release:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CHANGELOG_TOKEN }}
+
+      - name: Merge changelog fragments
+        id: merge
+        uses: ten-thousand-hammers/changelog-merge@v1
+
+      - name: Fallback to git-cliff when there are no fragments
+        if: steps.merge.outputs.has-fragments == 'false'
+        uses: orhun/git-cliff-action@v4.6.0
+        with:
+          config: cliff.toml
+          args: --unreleased
+        env:
+          OUTPUT: CHANGES_COMBINED.md
+
+      - name: Read the unreleased changes
+        id: reader
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          validation_level: none
+          version: "Unreleased"
+          path: ./CHANGES_COMBINED.md
+
+      - name: Release
+        id: release
+        uses: ten-thousand-hammers/changelog-release@v1
+        with:
+          changes: ${{ steps.reader.outputs.changes }}
+          version-file: config/version
+          token: ${{ secrets.CHANGELOG_TOKEN }}

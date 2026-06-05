@@ -1,0 +1,162 @@
+name: Changelog Release
+description: >-
+  Compute the next CalVer version, insert the release notes into CHANGELOG.md,
+  clean up consumed fragments, commit and tag the release, and create a GitHub
+  Release.
+
+inputs:
+  changes:
+    description: Release notes body (e.g. the merged "Unreleased" section).
+    required: true
+  version:
+    description: Version to release. Leave empty to compute the next CalVer version from tags on main.
+    required: false
+    default: ""
+  changelog-file:
+    description: Path to the cumulative changelog file to insert into.
+    required: false
+    default: CHANGELOG.md
+  insert-line:
+    description: 1-based line number in the changelog file to insert the new release entry at.
+    required: false
+    default: "7"
+  fragments-dir:
+    description: Directory of consumed per-PR fragments to delete.
+    required: false
+    default: changelog
+  combined-file:
+    description: Transient merged changelog file to delete.
+    required: false
+    default: CHANGES_COMBINED.md
+  version-file:
+    description: Optional file to write the version string to (e.g. config/version). Leave empty to skip.
+    required: false
+    default: ""
+  extra-add:
+    description: Extra space-separated paths to include in the release commit.
+    required: false
+    default: ""
+  commit-message-prefix:
+    description: Prefix for the release commit message.
+    required: false
+    default: "chore: Release"
+  skip-ci:
+    description: Append "[skip ci]" to the commit message.
+    required: false
+    default: "true"
+  tag:
+    description: Create and push a git tag for the version.
+    required: false
+    default: "true"
+  create-github-release:
+    description: Create a GitHub Release for the version.
+    required: false
+    default: "true"
+  make-latest:
+    description: Mark the GitHub Release as the latest.
+    required: false
+    default: "true"
+  prerelease:
+    description: Mark the GitHub Release as a prerelease.
+    required: false
+    default: "false"
+  token:
+    description: Token used to create the GitHub Release.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The version that was released.
+    value: ${{ steps.version.outputs.version }}
+  released:
+    description: Whether a GitHub Release was created.
+    value: ${{ inputs.create-github-release }}
+
+runs:
+  using: composite
+  steps:
+    - name: Determine version
+      id: version
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$INPUT_VERSION" ]; then
+          VERSION="$INPUT_VERSION"
+        else
+          VERSION="$(bash "$GITHUB_ACTION_PATH/next_version.sh")"
+        fi
+        echo "Resolved version: $VERSION"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+    - name: Insert changes into changelog
+      shell: bash
+      env:
+        CHANGELOG_CHANGES: ${{ inputs.changes }}
+        CHANGELOG_FILE: ${{ inputs.changelog-file }}
+        INSERT_LINE: ${{ inputs.insert-line }}
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        # Escape % characters to prevent printf interpreting them.
+        sanitized_changes=$(printf "%s" "$CHANGELOG_CHANGES" | sed 's/%/%%/g')
+        insert_changelog="$(printf "\n## [%s]\n\n%s" "$VERSION" "$sanitized_changes")"
+        awk -v insert="$insert_changelog" -v line="$INSERT_LINE" 'NR==line{print insert}1' \
+          "$CHANGELOG_FILE" > "$CHANGELOG_FILE.tmp" && mv "$CHANGELOG_FILE.tmp" "$CHANGELOG_FILE"
+
+    - name: Remove consumed fragments
+      shell: bash
+      env:
+        COMBINED_FILE: ${{ inputs.combined-file }}
+        FRAGMENTS_DIR: ${{ inputs.fragments-dir }}
+      run: |
+        rm -f "$COMBINED_FILE"
+        rm -f "$FRAGMENTS_DIR"/*-CHANGES.md
+
+    - name: Update version file
+      if: inputs.version-file != ''
+      shell: bash
+      env:
+        VERSION_FILE: ${{ inputs.version-file }}
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        echo "$VERSION" > "$VERSION_FILE"
+
+    - name: Build commit message
+      id: message
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.commit-message-prefix }}
+        VERSION: ${{ steps.version.outputs.version }}
+        SKIP_CI: ${{ inputs.skip-ci }}
+        CHANGES: ${{ inputs.changes }}
+      run: |
+        SUFFIX=""
+        if [ "$SKIP_CI" = "true" ]; then SUFFIX=" [skip ci]"; fi
+        {
+          echo "message<<__CHANGELOG_EOF__"
+          printf "%s %s%s\n\n%s\n" "$PREFIX" "$VERSION" "$SUFFIX" "$CHANGES"
+          echo "__CHANGELOG_EOF__"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Commit, push and tag
+      uses: EndBug/add-and-commit@v9
+      with:
+        add: "${{ inputs.changelog-file }} ${{ inputs.version-file }} ${{ inputs.extra-add }}"
+        remove: ${{ inputs.fragments-dir }}/*-CHANGES.md
+        message: ${{ steps.message.outputs.message }}
+        tag: ${{ inputs.tag == 'true' && steps.version.outputs.version || '' }}
+
+    - name: Create GitHub Release
+      if: inputs.create-github-release == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        body: ${{ inputs.changes }}
+        token: ${{ inputs.token }}
+        draft: false
+        prerelease: ${{ inputs.prerelease }}
+        make_latest: ${{ inputs.make-latest }}
+        files: ""
+        fail_on_unmatched_files: false
