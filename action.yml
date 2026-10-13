@@ -97,12 +97,7 @@ runs:
         CHANGELOG_FILE: ${{ inputs.changelog-file }}
         INSERT_LINE: ${{ inputs.insert-line }}
         VERSION: ${{ steps.version.outputs.version }}
-      run: |
-        # Escape % characters to prevent printf interpreting them.
-        sanitized_changes=$(printf "%s" "$CHANGELOG_CHANGES" | sed 's/%/%%/g')
-        insert_changelog="$(printf "\n## [%s]\n\n%s" "$VERSION" "$sanitized_changes")"
-        awk -v insert="$insert_changelog" -v line="$INSERT_LINE" 'NR==line{print insert}1' \
-          "$CHANGELOG_FILE" > "$CHANGELOG_FILE.tmp" && mv "$CHANGELOG_FILE.tmp" "$CHANGELOG_FILE"
+      run: bash "$GITHUB_ACTION_PATH/insert_changelog.sh"
 
     - name: Remove consumed fragments
       shell: bash
